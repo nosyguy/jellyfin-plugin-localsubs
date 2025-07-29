@@ -30,6 +30,30 @@ Install plugin version according to your Jellyfin version.
 
 ## Installation
 
+### `libicu`
+
+If you use Linux to run Jellyfin, make sure you have `libicu` installed on your system/container for .Net runtime to be able to recognize all locale (language) identifiers.
+
+e.g.
+* Debian:
+  ```
+  sudo apt install libicu-devel
+  ```
+* Red Hat:
+  ```
+  sudo yum install libicu
+  ```
+* Arch:
+  ```
+  sudo pacman -S icu
+  ```
+* Alpine:
+  ```
+  apk add icu-libs icu-data-full
+  ```
+
+> `libicu` is needed by .Net runtime on Linux for full data of locales (languages) information, like language identifiers and names. This plugin uses that information provided by .Net runtime to match language identifiers on file names to languages. Most desktop Linux would probably already have this from other existing applications, but minimalistic installations or containers would probably not. Windows .Net runtime already includes all the locale data, so this step is not required on Windows.
+
 ### Add repository
 
 The plugin can be installed using a custom plugin repository hosted on Github. This is only done once. To add this repository, follow these steps:
