@@ -39,7 +39,7 @@ public class LocalSubsProvider : ISubtitleProvider
     public IEnumerable<VideoContentType> SupportedMediaTypes => LocalSubsConstants.MEDIATYPES;
 
     /// <inheritdoc/>
-    public Task<SubtitleResponse> GetSubtitles(string id, CancellationToken cancellationToken)
+    public async Task<SubtitleResponse> GetSubtitles(string id, CancellationToken cancellationToken)
     {
         _logger.LogDebug("GetSubtitles id: {Id}", id);
         if (string.IsNullOrEmpty(id))
@@ -66,13 +66,18 @@ public class LocalSubsProvider : ISubtitleProvider
             throw new ArgumentException("File do not exist", nameof(id));
         }
 
-        _logger.LogInformation("GetSubtitles return file: {Path}", path);
-        return Task.FromResult(new SubtitleResponse
+        _logger.LogInformation("GetSubtitles reading file into memory: {Path}", path);
+        
+        // Read the entire file into a MemoryStream to avoid file locking issues
+        byte[] fileBytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+        var memoryStream = new MemoryStream(fileBytes);
+
+        return new SubtitleResponse
         {
             Format = ext,
             Language = lang,
-            Stream = File.OpenRead(path),
-        });
+            Stream = memoryStream,
+        };
     }
 
     [SuppressMessage("StyleCop.CSharp.SpacingRules", "SA1008:OpeningParenthesisMustBeSpacedCorrectly", Justification = "Reviewed. Occurring on delegate syntax.")]
