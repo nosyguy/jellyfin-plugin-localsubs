@@ -15,26 +15,43 @@ using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.LocalSubs;
 
+/// <summary>
+/// Local file subtitle provider.
+/// </summary>
 public class LocalSubsProvider : ISubtitleProvider
 {
     private readonly ILogger<LocalSubsProvider> _logger;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="LocalSubsProvider"/> class.
+    /// </summary>
+    /// <param name="logger">Instance of the <see cref="ILogger{LocalSubsProvider}"/> interface.</param>
+    /// <param name="httpClientFactory">The <see cref="IHttpClientFactory"/> for creating Http Clients.</param>
     public LocalSubsProvider(ILogger<LocalSubsProvider> logger, IHttpClientFactory httpClientFactory)
     {
         _logger = logger;
     }
 
+    /// <inheritdoc/>
     public string Name => LocalSubsConstants.PLUGINNAME;
 
+    /// <inheritdoc/>
     public IEnumerable<VideoContentType> SupportedMediaTypes => LocalSubsConstants.MEDIATYPES;
 
+    /// <inheritdoc/>
     public async Task<SubtitleResponse> GetSubtitles(string id, CancellationToken cancellationToken)
     {
         _logger.LogDebug("GetSubtitles id: {Id}", id);
-        if (string.IsNullOrEmpty(id)) throw new ArgumentException("Missing param", nameof(id));
+        if (string.IsNullOrEmpty(id))
+        {
+            throw new ArgumentException("Missing param", nameof(id));
+        }
 
         string[] parts = id.Split(LocalSubsConstants.IDSEPARATOR);
-        if (parts.Length < 3) throw new ArgumentException("Invalid id", nameof(id));
+        if (parts.Length < 3)
+        {
+            throw new ArgumentException("Invalid id", nameof(id));
+        }
 
         string ext = parts[0];
         string lang = parts[1];
@@ -50,10 +67,15 @@ public class LocalSubsProvider : ISubtitleProvider
             path = pathHex;
         }
 
-        if (!File.Exists(path)) throw new ArgumentException($"File does not exist: {path}", nameof(id));
+        if (!File.Exists(path))
+        {
+            throw new ArgumentException($"File does not exist: {path}", nameof(id));
+        }
 
         _logger.LogInformation("GetSubtitles reading file into memory: {Path}", path);
+        
         byte[] fileBytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+
         return new SubtitleResponse
         {
             Format = ext,
@@ -62,9 +84,9 @@ public class LocalSubsProvider : ISubtitleProvider
         };
     }
 
+    [SuppressMessage("StyleCop.CSharp.SpacingRules", "SA1008:OpeningParenthesisMustBeSpacedCorrectly", Justification = "Reviewed. Occurring on delegate syntax.")]
     private static string GeneratePattern(string text, IDictionary<string, string> dict)
     {
-        // REMOVED the ^ and $ anchors to allow fuzzy matching by default
         return Regex.Replace(text, "(" + string.Join("|", dict.Keys.Select(Regex.Escape)) + ")", delegate (Match m)
         {
             return dict[m.Value];
@@ -74,7 +96,10 @@ public class LocalSubsProvider : ISubtitleProvider
     private IEnumerable<string> MatchFile(string mediaDir, string template, IDictionary<string, string> placeholders)
     {
         string[] parts = template.Split(Path.DirectorySeparatorChar);
-        if (parts.Length < 1) return Enumerable.Empty<string>();
+        if (parts.Length < 1)
+        {
+            return Enumerable.Empty<string>();
+        }
 
         List<string> dirs = [mediaDir];
         for (int i = 0; i < parts.Length - 1; i++)
@@ -89,6 +114,7 @@ public class LocalSubsProvider : ISubtitleProvider
                     subDirs.AddRange(Directory.EnumerateDirectories(dir).Where(d => dirRegex.IsMatch(Path.GetFileName(d) ?? string.Empty)));
                 }
             }
+
             dirs = subDirs.Distinct().ToList();
         }
 
@@ -102,9 +128,11 @@ public class LocalSubsProvider : ISubtitleProvider
                 files.AddRange(Directory.EnumerateFiles(dir).Where(f => fileRegex.IsMatch(Path.GetFileName(f))));
             }
         }
+
         return files.Distinct();
     }
 
+    /// <inheritdoc/>
     public Task<IEnumerable<RemoteSubtitleInfo>> Search(SubtitleSearchRequest request, CancellationToken cancellationToken)
     {
         string[] templates = LocalSubsPlugin.Instance!.Configuration.Templates;
@@ -113,39 +141,45 @@ public class LocalSubsProvider : ISubtitleProvider
             return Task.FromResult(Enumerable.Empty<RemoteSubtitleInfo>());
         }
 
-        // ULTIMATE FIX: Hardcoded English variations to bypass CultureInfo issues
         List<string> langStrings = ["eng", "en", "english"];
-        
-        // Still try to add CultureInfo names but wrap in try-catch
-        try {
+
+        try
+        {
             var culture = CultureInfo.GetCultureInfo(request.TwoLetterISOLanguageName);
             langStrings.Add(culture.EnglishName.ToLowerInvariant());
             langStrings.Add(request.Language.ToLowerInvariant());
-        } catch { }
+        }
+        catch
+        {
+            // Ignore if culture is missing
+        }
 
         langStrings = langStrings.Distinct().ToList();
 
         string dir = Path.GetDirectoryName(request.MediaPath) ?? string.Empty;
         string fn = Path.GetFileNameWithoutExtension(request.MediaPath);
-        
+
         Dictionary<string, string> placeholders = new Dictionary<string, string>
         {
             { "%f%", Regex.Escape(Path.GetFileName(request.MediaPath)) },
             { "%fn%", Regex.Escape(fn) },
             { "%fe%", Regex.Escape(Path.GetExtension(request.MediaPath)) },
             { "%n%", "[0-9]+" },
-            { "%l%", ".*(" + string.Join("|", langStrings) + ").*" }, // FUZZY language matching
+            { "%l%", ".*(" + string.Join("|", langStrings) + ").*" },
             { "%any%", ".*" }
         };
 
         List<RemoteSubtitleInfo> matches = [];
         foreach (string template in templates)
         {
-            if (string.IsNullOrEmpty(template)) continue;
+            if (string.IsNullOrEmpty(template))
+            {
+                continue;
+            }
 
             foreach (string match in MatchFile(dir, template, placeholders))
             {
-                string ext = (Path.GetExtension(match) ?? "srt").ToLowerInvariant().Replace(".", string.Empty);
+                string ext = (Path.GetExtension(match) ?? "srt").ToLowerInvariant().Replace(".", string.Empty, StringComparison.OrdinalIgnoreCase);
                 string pathHex = Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes(match));
                 string id = string.Join(LocalSubsConstants.IDSEPARATOR, ext, request.Language, pathHex);
 
@@ -159,6 +193,7 @@ public class LocalSubsProvider : ISubtitleProvider
                 });
             }
         }
+
         return Task.FromResult(matches.AsEnumerable());
     }
 }
