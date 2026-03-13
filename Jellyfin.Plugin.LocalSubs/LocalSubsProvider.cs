@@ -67,7 +67,6 @@ public class LocalSubsProvider : ISubtitleProvider
         }
 
         _logger.LogInformation("GetSubtitles reading file into memory: {Path}", path);
-        
         // Read the entire file into a MemoryStream to avoid file locking issues
         byte[] fileBytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
         var memoryStream = new MemoryStream(fileBytes);
