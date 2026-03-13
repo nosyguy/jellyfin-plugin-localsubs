@@ -73,7 +73,7 @@ public class LocalSubsProvider : ISubtitleProvider
         }
 
         _logger.LogInformation("GetSubtitles reading file into memory: {Path}", path);
-        
+
         byte[] fileBytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
 
         return new SubtitleResponse
@@ -151,7 +151,6 @@ public class LocalSubsProvider : ISubtitleProvider
         }
         catch
         {
-            // Ignore if culture is missing
         }
 
         langStrings = langStrings.Distinct().ToList();
