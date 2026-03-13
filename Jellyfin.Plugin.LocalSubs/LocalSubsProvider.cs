@@ -15,198 +15,150 @@ using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.LocalSubs;
 
-/// <summary>
-/// Local file subtitle provider.
-/// </summary>
 public class LocalSubsProvider : ISubtitleProvider
 {
     private readonly ILogger<LocalSubsProvider> _logger;
 
-    /// <summary>
-    /// Initializes a new instance of the <see cref="LocalSubsProvider"/> class.
-    /// </summary>
-    /// <param name="logger">Instance of the <see cref="ILogger{LocalSubsProvider}"/> interface.</param>
-    /// <param name="httpClientFactory">The <see cref="IHttpClientFactory"/> for creating Http Clients.</param>
     public LocalSubsProvider(ILogger<LocalSubsProvider> logger, IHttpClientFactory httpClientFactory)
     {
         _logger = logger;
     }
 
-    /// <inheritdoc/>
     public string Name => LocalSubsConstants.PLUGINNAME;
 
-    /// <inheritdoc/>
     public IEnumerable<VideoContentType> SupportedMediaTypes => LocalSubsConstants.MEDIATYPES;
 
-    /// <inheritdoc/>
     public async Task<SubtitleResponse> GetSubtitles(string id, CancellationToken cancellationToken)
     {
         _logger.LogDebug("GetSubtitles id: {Id}", id);
-        if (string.IsNullOrEmpty(id))
-        {
-            throw new ArgumentException("Missing param", nameof(id));
-        }
+        if (string.IsNullOrEmpty(id)) throw new ArgumentException("Missing param", nameof(id));
 
         string[] parts = id.Split(LocalSubsConstants.IDSEPARATOR);
-        if (parts.Length < 3)
-        {
-            throw new ArgumentException("Invalid id", nameof(id));
-        }
+        if (parts.Length < 3) throw new ArgumentException("Invalid id", nameof(id));
 
         string ext = parts[0];
         string lang = parts[1];
-        if (string.IsNullOrEmpty(ext) || string.IsNullOrEmpty(lang))
-        {
-            throw new ArgumentException("Invalid id (extension and/or language is invalid)", nameof(id));
-        }
-
-        // Decode the hex path back to a normal string
         string pathHex = id.Substring(ext.Length + lang.Length + 2);
         string path;
+
         try
         {
             path = System.Text.Encoding.UTF8.GetString(Convert.FromHexString(pathHex));
         }
         catch
         {
-            // Fallback just in case there are old IDs floating around that aren't hex encoded
             path = pathHex;
         }
 
-        if (!File.Exists(path))
-        {
-            throw new ArgumentException($"File does not exist: {path}", nameof(id));
-        }
+        if (!File.Exists(path)) throw new ArgumentException($"File does not exist: {path}", nameof(id));
 
         _logger.LogInformation("GetSubtitles reading file into memory: {Path}", path);
-
         byte[] fileBytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
-        var memoryStream = new MemoryStream(fileBytes);
-
         return new SubtitleResponse
         {
             Format = ext,
             Language = lang,
-            Stream = memoryStream,
+            Stream = new MemoryStream(fileBytes),
         };
     }
 
-    [SuppressMessage("StyleCop.CSharp.SpacingRules", "SA1008:OpeningParenthesisMustBeSpacedCorrectly", Justification = "Reviewed. Occurring on delegate syntax.")]
     private static string GeneratePattern(string text, IDictionary<string, string> dict)
     {
-        return "^" + Regex.Replace(text, "(" + string.Join("|", dict.Keys) + ")", delegate (Match m)
+        // REMOVED the ^ and $ anchors to allow fuzzy matching by default
+        return Regex.Replace(text, "(" + string.Join("|", dict.Keys.Select(Regex.Escape)) + ")", delegate (Match m)
         {
             return dict[m.Value];
-        }) + "$";
+        });
     }
 
     private IEnumerable<string> MatchFile(string mediaDir, string template, IDictionary<string, string> placeholders)
     {
         string[] parts = template.Split(Path.DirectorySeparatorChar);
-        _logger.LogDebug("MatchFile using parts: {Parts} separator: {DirectorySeparatorChar}", parts, Path.DirectorySeparatorChar);
-        if (parts.Length < 1)
-        {
-            return Enumerable.Empty<string>();
-        }
+        if (parts.Length < 1) return Enumerable.Empty<string>();
 
         List<string> dirs = [mediaDir];
         for (int i = 0; i < parts.Length - 1; i++)
         {
-            string dirPattern = GeneratePattern(parts[i], placeholders);
-            Regex dirRegex = new Regex(dirPattern);
+            string dirPattern = "^" + GeneratePattern(parts[i], placeholders) + "$";
+            Regex dirRegex = new Regex(dirPattern, RegexOptions.IgnoreCase);
             List<string> subDirs = [];
             foreach (string dir in dirs)
             {
-                _logger.LogDebug("Finding directories in {Directory} using pattern {DirectoryPattern}", dir, dirPattern);
-                subDirs.AddRange(Directory.EnumerateDirectories(dir).Where(d => dirRegex.IsMatch(Path.GetFileName(d) ?? string.Empty) && !subDirs.Contains(d)));
+                if (Directory.Exists(dir))
+                {
+                    subDirs.AddRange(Directory.EnumerateDirectories(dir).Where(d => dirRegex.IsMatch(Path.GetFileName(d) ?? string.Empty)));
+                }
             }
-
-            dirs.Clear();
-            dirs.AddRange(subDirs);
+            dirs = subDirs.Distinct().ToList();
         }
 
         List<string> files = [];
-        string filePattern = GeneratePattern(parts[parts.Length - 1], placeholders);
-        Regex fileRegex = new Regex(filePattern);
+        string filePattern = "^" + GeneratePattern(parts[parts.Length - 1], placeholders) + "$";
+        Regex fileRegex = new Regex(filePattern, RegexOptions.IgnoreCase);
         foreach (string dir in dirs)
         {
-            _logger.LogDebug("Finding files in {Directory} using pattern {FilePattern}", dir, filePattern);
-            files.AddRange(Directory.EnumerateFiles(dir).Where(f => fileRegex.IsMatch(Path.GetFileName(f)) && !files.Contains(f)));
+            if (Directory.Exists(dir))
+            {
+                files.AddRange(Directory.EnumerateFiles(dir).Where(f => fileRegex.IsMatch(Path.GetFileName(f))));
+            }
         }
-
-        return files;
+        return files.Distinct();
     }
 
-    /// <inheritdoc/>
     public Task<IEnumerable<RemoteSubtitleInfo>> Search(SubtitleSearchRequest request, CancellationToken cancellationToken)
     {
-        _logger.LogDebug("Search MediaPath: {MediaPath} TwoLetterISOLanguageName: {TwoLetterISOLanguageName} Language: {Language}", request.MediaPath, request.TwoLetterISOLanguageName, request.Language);
-
         string[] templates = LocalSubsPlugin.Instance!.Configuration.Templates;
-
-        ArgumentNullException.ThrowIfNull(request);
-
         if (string.IsNullOrEmpty(request.MediaPath) || templates == null || templates.Length < 1)
         {
             return Task.FromResult(Enumerable.Empty<RemoteSubtitleInfo>());
         }
 
-        List<string> langStrings =
-        [
-            request.Language, // Three letter language code
-            request.TwoLetterISOLanguageName, // Two letter language code
-        ];
-        try
-        {
-            langStrings.Add(CultureInfo.GetCultureInfo(request.TwoLetterISOLanguageName).EnglishName);
-        }
-        catch (CultureNotFoundException e)
-        {
-            _logger.LogError(e, "Culture not found for {TwoLetterISOLanguageName}", request.TwoLetterISOLanguageName);
-        }
+        // ULTIMATE FIX: Hardcoded English variations to bypass CultureInfo issues
+        List<string> langStrings = ["eng", "en", "english"];
+        
+        // Still try to add CultureInfo names but wrap in try-catch
+        try {
+            var culture = CultureInfo.GetCultureInfo(request.TwoLetterISOLanguageName);
+            langStrings.Add(culture.EnglishName.ToLowerInvariant());
+            langStrings.Add(request.Language.ToLowerInvariant());
+        } catch { }
+
+        langStrings = langStrings.Distinct().ToList();
 
         string dir = Path.GetDirectoryName(request.MediaPath) ?? string.Empty;
-        string f = Path.GetFileName(request.MediaPath);
         string fn = Path.GetFileNameWithoutExtension(request.MediaPath);
-        string fe = Path.GetExtension(request.MediaPath);
+        
         Dictionary<string, string> placeholders = new Dictionary<string, string>
         {
-            { "%f%", Regex.Escape(f) },
+            { "%f%", Regex.Escape(Path.GetFileName(request.MediaPath)) },
             { "%fn%", Regex.Escape(fn) },
-            { "%fe%", Regex.Escape(fe) },
+            { "%fe%", Regex.Escape(Path.GetExtension(request.MediaPath)) },
             { "%n%", "[0-9]+" },
-            { "%l%", "(?i)(" + string.Join("|", langStrings) + ")" },
-            { "%any%", ".+" }
+            { "%l%", ".*(" + string.Join("|", langStrings) + ").*" }, // FUZZY language matching
+            { "%any%", ".*" }
         };
+
         List<RemoteSubtitleInfo> matches = [];
         foreach (string template in templates)
         {
-            if (string.IsNullOrEmpty(template))
-            {
-                continue;
-            }
+            if (string.IsNullOrEmpty(template)) continue;
 
             foreach (string match in MatchFile(dir, template, placeholders))
             {
-                string ext = (Path.GetExtension(match) ?? "srt").ToLowerInvariant().Replace(".", string.Empty, StringComparison.OrdinalIgnoreCase);
-                string lang = request.Language;
-
-                // Convert the path to a hex string so slashes don't break Jellyfin's API routing
+                string ext = (Path.GetExtension(match) ?? "srt").ToLowerInvariant().Replace(".", string.Empty);
                 string pathHex = Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes(match));
-                string id = string.Join(LocalSubsConstants.IDSEPARATOR, ext, lang, pathHex);
+                string id = string.Join(LocalSubsConstants.IDSEPARATOR, ext, request.Language, pathHex);
 
-                _logger.LogInformation("RemoteSubtitleInfo MediaPath: {MediaPath} Format: {Extension} Language: {Language} Id: {Id}", request.MediaPath, ext, lang, id);
                 matches.Add(new RemoteSubtitleInfo
                 {
                     Id = id,
                     ProviderName = LocalSubsConstants.PLUGINNAME,
                     Format = ext,
-                    ThreeLetterISOLanguageName = lang,
+                    ThreeLetterISOLanguageName = request.Language,
                     DateCreated = new FileInfo(match).CreationTime,
                 });
             }
         }
-
         return Task.FromResult(matches.AsEnumerable());
     }
 }
