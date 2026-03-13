@@ -63,11 +63,11 @@ public class LocalSubsProvider : ISubtitleProvider
         // Decode the hex path back to a normal string
         string pathHex = id.Substring(ext.Length + lang.Length + 2);
         string path;
-        try 
+        try
         {
             path = System.Text.Encoding.UTF8.GetString(Convert.FromHexString(pathHex));
-        } 
-        catch 
+        }
+        catch
         {
             // Fallback just in case there are old IDs floating around that aren't hex encoded
             path = pathHex;
@@ -79,7 +79,7 @@ public class LocalSubsProvider : ISubtitleProvider
         }
 
         _logger.LogInformation("GetSubtitles reading file into memory: {Path}", path);
-        
+
         byte[] fileBytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
         var memoryStream = new MemoryStream(fileBytes);
 
@@ -91,122 +91,4 @@ public class LocalSubsProvider : ISubtitleProvider
         };
     }
 
-    [SuppressMessage("StyleCop.CSharp.SpacingRules", "SA1008:OpeningParenthesisMustBeSpacedCorrectly", Justification = "Reviewed. Occurring on delegate syntax.")]
-    private static string GeneratePattern(string text, IDictionary<string, string> dict)
-    {
-        return "^" + Regex.Replace(text, "(" + string.Join("|", dict.Keys) + ")", delegate (Match m)
-        {
-            return dict[m.Value];
-        }) + "$";
-    }
-
-    private IEnumerable<string> MatchFile(string mediaDir, string template, IDictionary<string, string> placeholders)
-    {
-        string[] parts = template.Split(Path.DirectorySeparatorChar);
-        _logger.LogDebug("MatchFile using parts: {Parts} separator: {DirectorySeparatorChar}", parts, Path.DirectorySeparatorChar);
-        if (parts.Length < 1)
-        {
-            return Enumerable.Empty<string>();
-        }
-
-        List<string> dirs = [mediaDir];
-        for (int i = 0; i < parts.Length - 1; i++)
-        {
-            string dirPattern = GeneratePattern(parts[i], placeholders);
-            Regex dirRegex = new Regex(dirPattern);
-            List<string> subDirs = [];
-            foreach (string dir in dirs)
-            {
-                _logger.LogDebug("Finding directories in {Directory} using pattern {DirectoryPattern}", dir, dirPattern);
-                subDirs.AddRange(Directory.EnumerateDirectories(dir).Where(d => dirRegex.IsMatch(Path.GetFileName(d) ?? string.Empty) && !subDirs.Contains(d)));
-            }
-
-            dirs.Clear();
-            dirs.AddRange(subDirs);
-        }
-
-        List<string> files = [];
-        string filePattern = GeneratePattern(parts[parts.Length - 1], placeholders);
-        Regex fileRegex = new Regex(filePattern);
-        foreach (string dir in dirs)
-        {
-            _logger.LogDebug("Finding files in {Directory} using pattern {FilePattern}", dir, filePattern);
-            files.AddRange(Directory.EnumerateFiles(dir).Where(f => fileRegex.IsMatch(Path.GetFileName(f)) && !files.Contains(f)));
-        }
-
-        return files;
-    }
-
-    /// <inheritdoc/>
-    public Task<IEnumerable<RemoteSubtitleInfo>> Search(SubtitleSearchRequest request, CancellationToken cancellationToken)
-    {
-        _logger.LogDebug("Search MediaPath: {MediaPath} TwoLetterISOLanguageName: {TwoLetterISOLanguageName} Language: {Language}", request.MediaPath, request.TwoLetterISOLanguageName, request.Language);
-
-        string[] templates = LocalSubsPlugin.Instance!.Configuration.Templates;
-
-        ArgumentNullException.ThrowIfNull(request);
-
-        if (string.IsNullOrEmpty(request.MediaPath) || templates == null || templates.Length < 1)
-        {
-            return Task.FromResult(Enumerable.Empty<RemoteSubtitleInfo>());
-        }
-
-        List<string> langStrings =
-        [
-            request.Language, // Three letter language code
-            request.TwoLetterISOLanguageName, // Two letter language code
-        ];
-        try
-        {
-            langStrings.Add(CultureInfo.GetCultureInfo(request.TwoLetterISOLanguageName).EnglishName);
-        }
-        catch (CultureNotFoundException e)
-        {
-            _logger.LogError(e, "Culture not found for {TwoLetterISOLanguageName}", request.TwoLetterISOLanguageName);
-        }
-
-        string dir = Path.GetDirectoryName(request.MediaPath) ?? string.Empty;
-        string f = Path.GetFileName(request.MediaPath);
-        string fn = Path.GetFileNameWithoutExtension(request.MediaPath);
-        string fe = Path.GetExtension(request.MediaPath);
-        Dictionary<string, string> placeholders = new Dictionary<string, string>
-        {
-            { "%f%", Regex.Escape(f) },
-            { "%fn%", Regex.Escape(fn) },
-            { "%fe%", Regex.Escape(fe) },
-            { "%n%", "[0-9]+" },
-            { "%l%", "(?i)(" + string.Join("|", langStrings) + ")" },
-            { "%any%", ".+" }
-        };
-        List<RemoteSubtitleInfo> matches = [];
-        foreach (string template in templates)
-        {
-            if (string.IsNullOrEmpty(template))
-            {
-                continue;
-            }
-
-            foreach (string match in MatchFile(dir, template, placeholders))
-            {
-                string ext = (Path.GetExtension(match) ?? "srt").ToLowerInvariant().Replace(".", string.Empty, StringComparison.OrdinalIgnoreCase);
-                string lang = request.Language;
-                
-                // Convert the path to a hex string so slashes don't break Jellyfin's API routing
-                string pathHex = Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes(match));
-                string id = string.Join(LocalSubsConstants.IDSEPARATOR, ext, lang, pathHex);
-                
-                _logger.LogInformation("RemoteSubtitleInfo MediaPath: {MediaPath} Format: {Extension} Language: {Language} Id: {Id}", request.MediaPath, ext, lang, id);
-                matches.Add(new RemoteSubtitleInfo
-                {
-                    Id = id,
-                    ProviderName = LocalSubsConstants.PLUGINNAME,
-                    Format = ext,
-                    ThreeLetterISOLanguageName = lang,
-                    DateCreated = new FileInfo(match).CreationTime,
-                });
-            }
-        }
-
-        return Task.FromResult(matches.AsEnumerable());
-    }
-}
+    [SuppressMessage("StyleCop.CSharp.SpacingRules",
