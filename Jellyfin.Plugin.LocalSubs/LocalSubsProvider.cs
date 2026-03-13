@@ -60,14 +60,26 @@ public class LocalSubsProvider : ISubtitleProvider
             throw new ArgumentException("Invalid id (extension and/or language is invalid)", nameof(id));
         }
 
-        string path = id.Substring(ext.Length + lang.Length + 2);
+        // Decode the hex path back to a normal string
+        string pathHex = id.Substring(ext.Length + lang.Length + 2);
+        string path;
+        try 
+        {
+            path = System.Text.Encoding.UTF8.GetString(Convert.FromHexString(pathHex));
+        } 
+        catch 
+        {
+            // Fallback just in case there are old IDs floating around that aren't hex encoded
+            path = pathHex;
+        }
+
         if (!File.Exists(path))
         {
-            throw new ArgumentException("File do not exist", nameof(id));
+            throw new ArgumentException($"File does not exist: {path}", nameof(id));
         }
 
         _logger.LogInformation("GetSubtitles reading file into memory: {Path}", path);
-        // Read the entire file into a MemoryStream to avoid file locking issues
+        
         byte[] fileBytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
         var memoryStream = new MemoryStream(fileBytes);
 
@@ -178,7 +190,11 @@ public class LocalSubsProvider : ISubtitleProvider
             {
                 string ext = (Path.GetExtension(match) ?? "srt").ToLowerInvariant().Replace(".", string.Empty, StringComparison.OrdinalIgnoreCase);
                 string lang = request.Language;
-                string id = string.Join(LocalSubsConstants.IDSEPARATOR, ext, lang, match);
+                
+                // Convert the path to a hex string so slashes don't break Jellyfin's API routing
+                string pathHex = Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes(match));
+                string id = string.Join(LocalSubsConstants.IDSEPARATOR, ext, lang, pathHex);
+                
                 _logger.LogInformation("RemoteSubtitleInfo MediaPath: {MediaPath} Format: {Extension} Language: {Language} Id: {Id}", request.MediaPath, ext, lang, id);
                 matches.Add(new RemoteSubtitleInfo
                 {
